@@ -354,7 +354,32 @@ def write_pdf(tab: dict, path: Path) -> None:
     pdf.output(str(path))
 
 
-def save_tab(tab: dict, output_dir: str = "guitar_tabs") -> dict[str, Path]:
+def save_tab(tab: dict, output_dir: str = "guitar_tabs", formats: list[str] | None = None) -> dict[str, Path]:
+    if formats is None:
+        formats = ["pdf"]
+
+    formats = [f.lower().strip() for f in formats]
+    valid = {"pdf", "txt", "text", "json"}
+    formats = [f for f in formats if f in valid]
+    if not formats:
+        formats = ["pdf"]
+
+    # normalize
+    if "text" in formats and "txt" not in formats:
+        formats.append("txt")
+    if "txt" in formats and "text" not in formats:
+        pass
+    # remove duplicates while preserving order
+    seen = set()
+    out_formats = []
+    for f in formats:
+        key = "txt" if f == "text" else f
+        if key in seen:
+            continue
+        seen.add(key)
+        out_formats.append(key)
+    formats = out_formats
+
     folder = Path(output_dir)
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -362,33 +387,41 @@ def save_tab(tab: dict, output_dir: str = "guitar_tabs") -> dict[str, Path]:
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     name = name.strip(" .") or "guitar_tab"
 
-    json_path = folder / f"{name}.json"
-    json_path.write_text(
-        json.dumps(tab, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    paths: dict[str, Path] = {}
 
-    text_path = folder / f"{name}.txt"
-    text_path.write_text(
-        f"{tab['title']} - {tab['artist']}\n"
-        f"Type: {tab['type']}\n"
-        f"Tuning: {tab['tuning']}\n"
-        f"Capo: {tab['capo']}\n"
-        f"Key: {tab['tonality']}\n"
-        f"Source: {tab['source_url']}\n\n"
-        f"{plain_tab(tab['content'])}\n",
-        encoding="utf-8",
-    )
+    if "json" in formats:
+        json_path = folder / f"{name}.json"
+        json_path.write_text(
+            json.dumps(tab, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        paths["json"] = json_path
 
-    pdf_path = folder / f"{name}.pdf"
-    write_pdf(tab, pdf_path)
+    if "txt" in formats:
+        text_path = folder / f"{name}.txt"
+        text_path.write_text(
+            f"{tab['title']} - {tab['artist']}\n"
+            f"Type: {tab['type']}\n"
+            f"Tuning: {tab['tuning']}\n"
+            f"Capo: {tab['capo']}\n"
+            f"Key: {tab['tonality']}\n"
+            f"Source: {tab['source_url']}\n\n"
+            f"{plain_tab(tab['content'])}\n",
+            encoding="utf-8",
+        )
+        paths["text"] = text_path
 
-    return {"json": json_path, "text": text_path, "pdf": pdf_path}
+    if "pdf" in formats:
+        pdf_path = folder / f"{name}.pdf"
+        write_pdf(tab, pdf_path)
+        paths["pdf"] = pdf_path
+
+    return paths
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Scrape an Ultimate Guitar tab and save it as a PDF."
+        description="Scrape an Ultimate Guitar tab and save it as files."
     )
     parser.add_argument("url", nargs="?", help="Ultimate Guitar tab URL")
     parser.add_argument(
@@ -396,6 +429,12 @@ def main(argv: list[str] | None = None) -> int:
         "--output-dir",
         default="guitar_tabs",
         help="Directory for the generated files (default: guitar_tabs)",
+    )
+    parser.add_argument(
+        "-f",
+        "--formats",
+        default="pdf",
+        help="Comma-separated file types to save (pdf, txt, json). Default: pdf",
     )
     args = parser.parse_args(argv)
 
@@ -409,18 +448,21 @@ def main(argv: list[str] | None = None) -> int:
         print("Please provide an Ultimate Guitar page URL.")
         return 1
 
+    formats = args.formats.split(",") if args.formats else ["pdf"]
+
     try:
         tab = fetch_tab(url)
-        paths = save_tab(tab, args.output_dir)
+        paths = save_tab(tab, args.output_dir, formats=formats)
 
         print(f"\nSong: {tab['title']}")
         print(f"Artist: {tab['artist']}")
         print(f"Type: {tab['type']}")
         print(f"Tuning: {tab['tuning']}")
         print(f"Capo: {tab['capo']}")
-        print(f"\nPDF: {paths['pdf'].resolve()}")
-        print(f"Text: {paths['text'].resolve()}")
-        print(f"JSON: {paths['json'].resolve()}")
+        for key in ["pdf", "text", "txt", "json"]:
+            if key in paths:
+                label = "Text" if key == "text" else key.upper()
+                print(f"\n{label}: {paths[key].resolve()}")
         return 0
 
     except (requests.RequestException, ValueError, json.JSONDecodeError, OSError) as e:
